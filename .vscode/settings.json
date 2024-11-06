@@ -1,0 +1,12 @@
+{
+	"[python]": {
+		"editor.formatOnSave": true,
+		"editor.formatOnSaveMode": "file",
+		"editor.defaultFormatter": "charliermarsh.ruff",
+		"editor.insertSpaces": true,
+		"editor.codeActionsOnSave": {
+			"source.organizeImports": "always",
+			"source.organizeImports.ruff": "always"
+		}
+	}
+}
