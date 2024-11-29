@@ -1,150 +1,121 @@
+import json
 import subprocess
-import time
-from typing import Literal
-
-import netifaces as ni
-
-path = "/etc/NetworkManager/system-connections/Wired connection static.nmconnection"
 
 
-def get_ethernet_mode() -> Literal["static", "dynamic"]:
-    stdout = subprocess.run(
-        ["nmcli", "con", "show", "--active"], stdout=subprocess.PIPE, text=True
-    ).check_returncode()
-    result = stdout.stdout
-    result = result.split("\n")
-    # active connection will be at the top of the list
-    for name in result:
-        if "Wired connection static" in name:
-            if "eth0" in name:
-                return "static"
-        elif "Wired connection auto" in name:
-            if "eth0" in name:
-                return "dynamic"
-        elif "Wired connection 1" in name:
-            subprocess.run(
-                [
-                    "nmcli",
-                    "con",
-                    "mod",
-                    "Wired connection 1",
-                    "con-name",
-                    "Wired connection auto",
-                ]
-            )
-            if "eth0" in name:
-                return "dynamic"
+def get_ethernet_static_status() -> bool:
+    output = subprocess.run(
+        ["nmcli", "-t", "con", "show", "Wired connection static"],
+        stdout=subprocess.PIPE,
+        text=True,
+        check=True,
+    )
+
+    option = "connection.autoconnect:"
+    idx = output.stdout.find(option)
+    if idx >= 0:
+        if output.stdout[idx + len(option)] == "y":
+            return True
+        else:
+            return False
     else:
-        raise FileNotFoundError
-
-
-# get the information for the ethernet settings screen
-def get_ethernet_settings():
-    ret = {}
-    ret["mode"] = get_ethernet_mode()
-    try:
-        ret["ip"] = ni.ifaddresses("eth0")[ni.AF_INET][0]["addr"]
-    except:
-        ret["ip"] = "no IP available"
-    try:
-        with open(path, "r") as con:
-            ip_line = get_line(path, "address1=")
-            file = con.readlines()
-            ret["ip_static"] = file[ip_line].split("=")[1]
-            ret["ip_static"] = ret["ip_static"].split("/")[0]
-    except:
-        subprocess.run(
-            [
-                "nmcli",
-                "con",
-                "add",
-                "type",
-                "ethernet",
-                "con-name",
-                "Wired connection static",
-                "ifname",
-                "eth0",
-                "ipv4.addresses",
-                "192.168.255.255/16",
-                "ipv4.method",
-                "manual",
-                "connection.autoconnect",
-                "no",
-            ]
+        raise EnvironmentError(
+            "Could not find the autoconnect option in the Static connection info"
         )
-        try:
-            with open(path, "r") as con:
-                ip_line = get_line(path, "address1=")
-                file = con.readlines()
-                ret["ip_static"] = file[ip_line].split("=")[1]
-                ret["ip_static"] = ret["ip_static"].split("/")[0]
-        except:
-            ret["ip_static"] = "missing"
-    return ret
+
+
+def get_ethernet_address() -> str:
+    out = subprocess.run(
+        ["ip", "-j", "address"], stdout=subprocess.PIPE, text=True, check=True
+    )
+    interfaces = json.loads(out.stdout)
+    for interface in interfaces:
+        if interface["ifname"] == "eth0":
+            return interface["addr_info"][0]["local"]
+    else:
+        return "no address"
+
+
+def get_ethernet_static_address():
+    out = subprocess.run(
+        ["nmcli", "-t", "con", "show", "Wired connection static"],
+        text=True,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    lines = out.stdout.splitlines()
+    for line in lines:
+        if line.startswith("ipv4.addresses:"):
+            return line.removeprefix("ipv4.addresses:").split("/")[0]
+    else:
+        return "no address"
 
 
 # apply changes that were made by the user
 def set_static_ethernet_ip(ip):
     subprocess.run(
-        ["nmcli", "con", "mod", "Wired connection static", "ipv4.addresses", f"{ip}/16"]
-    ).check_returncode()
-    if get_ethernet_mode() == "static":
-        subprocess.run(
-            ["nmcli", "con", "up", "Wired connection auto"]
-        ).check_returncode()
-        time.sleep(0.5)
-        subprocess.run(
-            ["nmcli", "con", "up", "Wired connection static"]
-        ).check_returncode()
+        [
+            "nmcli",
+            "con",
+            "mod",
+            "Wired connection static",
+            "ipv4.addresses",
+            f"{ip}/16",
+        ],
+        check=True,
+    )
 
 
 # switch between static or dynamic ip connection
-def set_ethernet_mode(mode: Literal["static", "dynamic"]):
-    if mode == "static":
-        subprocess.run(
-            [
-                "nmcli",
-                "con",
-                "mod",
-                "Wired connection auto",
-                "connection.autoconnect",
-                "no",
-            ]
-        ).check_returncode()
-        subprocess.run(
-            [
-                "nmcli",
-                "con",
-                "mod",
-                "Wired connection static",
-                "connection.autoconnect",
-                "yes",
-            ]
-        ).check_returncode()
-        subprocess.run(
-            ["nmcli", "con", "up", "Wired connection static"]
-        ).check_returncode()
-    elif mode == "dynamic":
-        subprocess.run(
-            [
-                "nmcli",
-                "con",
-                "mod",
-                "Wired connection auto",
-                "connection.autoconnect",
-                "yes",
-            ]
-        ).check_returncode()
-        subprocess.run(
-            [
-                "nmcli",
-                "con",
-                "mod",
-                "Wired connection static",
-                "connection.autoconnect",
-                "no",
-            ]
-        ).check_returncode()
-        subprocess.run(
-            ["nmcli", "con", "up", "Wired connection auto"]
-        ).check_returncode()
+def activate_ethernet_static():
+    subprocess.run(
+        [
+            "nmcli",
+            "con",
+            "mod",
+            "Wired connection auto",
+            "connection.autoconnect",
+            "no",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "nmcli",
+            "con",
+            "mod",
+            "Wired connection static",
+            "connection.autoconnect",
+            "yes",
+        ],
+        check=True,
+    )
+    subprocess.run(["nmcli", "con", "up", "Wired connection static"], check=True)
+
+
+def deactivate_ethernet_static():
+    subprocess.run(
+        [
+            "nmcli",
+            "con",
+            "mod",
+            "Wired connection auto",
+            "connection.autoconnect",
+            "yes",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "nmcli",
+            "con",
+            "mod",
+            "Wired connection static",
+            "connection.autoconnect",
+            "no",
+        ],
+        check=True,
+    )
+    subprocess.run(["nmcli", "con", "up", "Wired connection auto"], check=True)
+
+
+# def get_static_ethernet_connections()?
