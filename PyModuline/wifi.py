@@ -13,7 +13,10 @@ def set_wifi(enable: bool) -> "tuple[bool, str]":
     Returns a tuple where bool is false if the service failed to change
     and str contains errors.
     """
-    return set_service("go-wifi", enable)
+    res, err = set_service("go-wifi", enable)
+    if not enable and res:
+        subprocess.run(["/sbin/modprobe", "-r", "brcmfmac"]).check_returncode()
+    return res, err
 
 
 def get_wifi_address() -> str:
