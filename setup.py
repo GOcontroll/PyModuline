@@ -18,7 +18,7 @@ setup(
     maintainer="Maud Spierings",
     install_requires=[],
     packages=[
-        "src/",
+        "PyModuline",
     ],
     python_requires=">=3.9",
 )

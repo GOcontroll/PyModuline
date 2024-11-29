@@ -1,7 +1,7 @@
 import json
 import subprocess
 
-from services import get_service, set_service
+from PyModuline.services import get_service, set_service
 
 
 def get_wifi() -> bool:
