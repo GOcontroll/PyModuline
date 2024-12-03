@@ -23,7 +23,7 @@ def get_ethernet_static_status() -> bool:
         )
 
 
-def get_ethernet_address() -> str:
+def get_ethernet_ip() -> str:
     out = subprocess.run(
         ["ip", "-j", "address"], stdout=subprocess.PIPE, text=True, check=True
     )
@@ -32,10 +32,10 @@ def get_ethernet_address() -> str:
         if interface["ifname"] == "eth0":
             return interface["addr_info"][0]["local"]
     else:
-        return "no address"
+        raise EnvironmentError("No address")
 
 
-def get_ethernet_static_address():
+def get_ethernet_static_ip():
     out = subprocess.run(
         ["nmcli", "-t", "con", "show", "Wired connection static"],
         text=True,
