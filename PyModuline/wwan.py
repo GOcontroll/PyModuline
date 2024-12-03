@@ -37,7 +37,7 @@ def get_wwan_stats() -> dict:
     stats["operator"] = mmcli["modem"]["3gpp"]["operator-name"]
     stats["model"] = mmcli["modem"]["generic"]["model"]
     stats["signal"] = mmcli["modem"]["generic"]["signal-quality"]["value"]
-    return json.dumps(stats)
+    return stats
 
 
 def get_apn() -> dict:
