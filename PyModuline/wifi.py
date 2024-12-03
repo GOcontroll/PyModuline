@@ -31,7 +31,7 @@ def get_wifi_address() -> str:
         return "no address"
 
 
-def get_ap_address():
+def get_ap_address() -> str:
     out = subprocess.run(
         ["nmcli", "-t", "con", "show", "GOcontroll-AP"],
         text=True,
