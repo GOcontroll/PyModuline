@@ -1,6 +1,7 @@
 import json
 import subprocess
 
+import PyModuline.dbus as dbus
 import PyModuline.services as services
 
 
@@ -41,23 +42,25 @@ def get_wwan_stats() -> dict:
 
 
 def get_apn() -> dict:
-    out = subprocess.run(
-        ["nmcli", "con", "show", "GO-cellular"],
-        stdout=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    lines = out.stdout.splitlines()
-    for line in lines:
-        if line.startswith("gsm.apn:"):
-            return line.removeprefix("gsm.apn:")
-    else:
-        return "no address"
+    client = dbus.get_nm_client()
+    wwan_con = client.get_connection_by_id("GO-cellular")
+    settings = wwan_con.get_setting_gsm()
+    return settings.get_property("apn")
 
 
 def set_apn(apn: str):
-    subprocess.run(["nmcli", "con", "mod", "GO-cellular", "gsm.apn", apn], check=True)
+    client = dbus.get_nm_client()
+    wwan_con = client.get_connection_by_id("GO-cellular")
+    settings = wwan_con.get_setting_gsm()
+    settings.set_property("apn", apn)
+    wwan_con.commit_changes_async(True, None, None, None)
+    # subprocess.run(["nmcli", "con", "mod", "GO-cellular", "gsm.apn", apn], check=True)
 
 
 def set_pin(pin: str):
-    subprocess.run(["nmcli", "con", "mod", "GO-cellular", "gsm.pin", pin], check=True)
+    client = dbus.get_nm_client()
+    wwan_con = client.get_connection_by_id("GO-cellular")
+    settings = wwan_con.get_setting_gsm()
+    settings.set_property("pin", pin)
+    wwan_con.commit_changes_async(True, None, None, None)
+    # subprocess.run(["nmcli", "con", "mod", "GO-cellular", "gsm.pin", pin], check=True)

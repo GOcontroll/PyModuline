@@ -1,181 +1,139 @@
-import json
+import socket
 import subprocess
 
-from PyModuline.services import get_service, set_service
+import gi
+
+import PyModuline.dbus as dbus
+import PyModuline.networking as networking
+import PyModuline.nmconstants as nmconstants
+
+gi.require_version("NM", "1.0")
+from gi.repository import NM, GLib
 
 
 def get_wifi() -> bool:
-    return get_service("go-wifi")
+    client = dbus.get_nm_client()
+    return client.get_wireless_enabled() and client.wireless_hardware_get_enabled()
 
 
-def set_wifi(enable: bool) -> "tuple[bool, str]":
-    """
-    Returns a tuple where bool is false if the service failed to change
-    and str contains errors.
-    """
-    res, err = set_service("go-wifi", enable)
-    if not enable and res:
-        subprocess.run(["/sbin/modprobe", "-r", "brcmfmac"]).check_returncode()
-    return res, err
+def get_wifi_mode() -> str:
+    client = dbus.get_nm_client()
+    wifi_device = client.get_device_by_iface("wlan0")
+    if wifi_device is None:
+        raise IOError("No WiFi device found")
+    mode = wifi_device.get_mode()
+    if mode == NM.SETTING_WIRELESS_MODE_INFRA:
+        return "wifi"
+    elif mode == NM.SETTING_WIRELESS_MODE_AP:
+        return "ap"
+    else:
+        raise EnvironmentError(f"Wifi device in unexpected mode: {mode}")
+
+
+def set_wifi(enable: bool):
+    client = dbus.get_nm_client()
+    client.dbus_set_property(
+        NM.DBUS_PATH,
+        NM.DBUS_INTERFACE,
+        "WirelessEnabled",
+        GLib.Variant("b", enable),
+        -1,
+        None,
+        None,
+        None,
+    )
 
 
 def get_wifi_address() -> str:
-    out = subprocess.run(
-        ["ip", "-j", "address"], stdout=subprocess.PIPE, text=True, check=True
-    )
-    interfaces = json.loads(out.stdout)
-    for interface in interfaces:
-        if interface["ifname"] == "wlan0":
-            return interface["addr_info"][0]["local"]
-    else:
-        return "no address"
+    client = dbus.get_nm_client()
+    wifi_device = client.get_device_by_iface("wlan0")
+    if wifi_device is None:
+        raise IOError("No WiFi device found")
+    config = wifi_device.get_ip4_config()
+    addresses = config.get_addresses()
+    if len(addresses):
+        return addresses[0].get_address()
+    raise EnvironmentError("WiFi device doesn't have an ipv4 address")
 
 
 def get_ap_address() -> str:
-    out = subprocess.run(
-        ["nmcli", "-t", "con", "show", "GOcontroll-AP"],
-        text=True,
-        check=True,
-        stdout=subprocess.PIPE,
-    )
-    lines = out.stdout.splitlines()
-    for line in lines:
-        if line.startswith("ipv4.addresses:"):
-            return line.removeprefix("ipv4.addresses:").split("/")[0]
-    else:
-        return "no address"
+    client = dbus.get_nm_client()
+    ap_con = client.get_connection_by_id("GOcontroll-AP")
+    settings = ap_con.get_setting_ip4_config()
+    return settings.get_address(0)
 
 
-def set_ap_address(str):
-    subprocess.run(
-        ["nmcli", "con", "mod", "GOcontroll-AP", "ipv4.addresses", f"{str}/16"],
-        check=True,
-    )
+def set_ap_address(ip: str):
+    # TODO validate ip
+    client = dbus.get_nm_client()
+    ap_con = client.get_connection_by_id("GOcontroll-AP")
+    settings = ap_con.get_setting_ip4_config()
+    addr = settings.get_address(0)
+    addr.set_address(ip)
+    settings.clear_addresses()
+    settings.add_address(addr)
+    ap_con.commit_changes_async(True, None, None, None)
 
 
 def activate_ap():
-    stdout = subprocess.run(
-        ["nmcli", "-t", "con"], stdout=subprocess.PIPE, text=True, check=True
-    )
-
-    connections = stdout.stdout.rstrip().split("\n")
-    wifi_connections = []
-    for con in connections:
-        if "wireless" in con:
-            if "GOcontroll-AP" not in con:
-                wifi_connections.append(con.split(":")[0])
-    for con in wifi_connections:
-        subprocess.run(
-            ["nmcli", "con", "mod", con, "connection.autoconnect", "no"], check=True
-        )
-
-    subprocess.run(
-        [
-            "nmcli",
-            "con",
-            "mod",
-            "GOcontroll-AP",
-            "connection.autoconnect",
-            "yes",
-        ],
-        check=True,
-    )
-
-    enable_connection("GOcontroll-AP")
+    client = dbus.get_nm_client()
+    # this list of connections should not be modified
+    connections = client.get_connections()
+    for connection in connections:
+        if connection.is_type(NM.SETTING_WIRELESS_SETTING_NAME):
+            owned_connection = client.get_connection_by_uuid(connection.get_uuid())
+            if owned_connection.get_id() == "GOcontroll-AP":
+                owned_connection.get_setting_connection().set_property(
+                    "autoconnect", "yes"
+                )
+                ap_connection = owned_connection
+            else:
+                owned_connection.get_setting_connection().set_property(
+                    "autoconnect", "no"
+                )
+            owned_connection.commit_changes_async(True, None, None, None)
+    client.activate_connection_async(ap_connection, None, None, None, None, None)
 
 
 def deactivate_ap():
-    stdout = subprocess.run(
-        ["nmcli", "-t", "con"], stdout=subprocess.PIPE, text=True, check=True
+    client = dbus.get_nm_client()
+    # this list of connections should not be modified
+    connections = client.get_connections()
+    for connection in connections:
+        if connection.is_type(NM.SETTING_WIRELESS_SETTING_NAME):
+            owned_connection = client.get_connection_by_uuid(connection.get_uuid())
+            if owned_connection.get_id() == "GOcontroll-AP":
+                owned_connection.get_setting_connection().set_property(
+                    "autoconnect", "no"
+                )
+            else:
+                owned_connection.get_setting_connection().set_property(
+                    "autoconnect", "yes"
+                )
+            owned_connection.commit_changes_async(True, None, None, None)
+    client.activate_connection_async(
+        None, client.get_device_by_iface("wlan0"), None, None, None, None
     )
-
-    connections = stdout.stdout.rstrip().split("\n")
-    wifi_connections = []
-    for con in connections:
-        if "wireless" in con:
-            if "GOcontroll-AP" not in con:
-                wifi_connections.append(con.split(":")[0])
-    for con in wifi_connections:
-        subprocess.run(
-            ["nmcli", "con", "mod", con, "connection.autoconnect", "yes"], check=True
-        )
-
-        subprocess.run(
-            [
-                "nmcli",
-                "con",
-                "mod",
-                "GOcontroll-AP",
-                "connection.autoconnect",
-                "no",
-            ],
-            check=True,
-        )
-
-        disable_connection("GOcontroll-AP")
-
-
-def enable_connection(con: str):
-    """Set the connection 'con' to up
-    raises subprocess.CalledProcessError when unsuccessfull"""
-    subprocess.run(["nmcli", "con", "up", con]).check_returncode()
-
-
-def disable_connection(con: str):
-    """Set the connection 'con' to down
-    raises subprocess.CalledProcessError when unsuccessfull"""
-    subprocess.run(["nmcli", "con", "down", con]).check_returncode()
-
-
-def get_ap_status() -> bool:
-    output = subprocess.run(
-        ["nmcli", "-t", "con", "show", "GOcontroll-AP"],
-        stdout=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-
-    option = "connection.autoconnect:"
-    idx = output.stdout.find(option)
-    if idx >= 0:
-        if output.stdout[idx + len(option)] == "y":
-            return True
-        else:
-            return False
-    else:
-        raise EnvironmentError("Could not find the autoconnect option in the AP info")
 
 
 def set_ap_pass(new_password: str):
     if len(new_password) < 8:
         raise ValueError("New password must be at least 8 characters long")
-    subprocess.run(
-        [
-            "nmcli",
-            "con",
-            "mod",
-            "GOcontroll-AP",
-            "wifi-sec.psk",
-            new_password,
-        ],
-        check=True,
-    )
+    client = dbus.get_nm_client()
+    ap_con = client.get_connection_by_id("GOcontroll-AP")
+    settings = ap_con.get_setting_wireless_security()
+    settings.set_property("psk", new_password)
+    ap_con.commit_changes_async(True, None, None, None)
 
 
 def set_ap_ssid(new_ssid: str):
     if len(new_ssid) < 1:
         raise ValueError("New ssid cannot be an empty string")
-    subprocess.run(
-        [
-            "nmcli",
-            "con",
-            "mod",
-            "GOcontroll-AP",
-            "802-11-wireless.ssid",
-            new_ssid,
-        ],
-        check=True,
-    )
+    client = dbus.get_nm_client()
+    ap_con = client.get_connection_by_id("GOcontroll-AP")
+    settings = ap_con.get_setting_wireless()
+    settings.set_property("ssid", GLib.Bytes.new(bytearray(new_ssid, "utf-8")))
+    ap_con.commit_changes_async(True, None, None, None)
 
 
 def get_ap_connections() -> list[dict[str, str]]:
@@ -222,66 +180,94 @@ def get_ap_connections() -> list[dict[str, str]]:
 
 def get_wifi_networks() -> list[dict[str, str]]:
     """Get the list of available wifi networks and their attributes"""
-    if get_ap_status():
-        raise EnvironmentError("The AP is still active, can't scan for wifi networks")
+    client = dbus.get_nm_client()
+    wifi_device = client.get_device_by_iface("wlan0")
 
-    # gets the list in a layout optimal for scripting, networks seperated by \n, columns seperated by :
-    wifi_list = subprocess.run(
-        ["nmcli", "-t", "dev", "wifi"],
-        stdout=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
+    wifi_device.RequestScan({})
+    access_points = wifi_device.GetAccessPoints()
+    active_point = wifi_device.ActiveAccessPoint()
 
-    known_conn_list = subprocess.run(
-        ["nmcli", "-t", "con"], stdout=subprocess.PIPE, text=True, check=True
-    )
-
-    networks = wifi_list.stdout.rstrip().split("\n")
     networks_out = []
-    for i in range(len(networks)):
-        network = networks[i].split(":")
-        if len(network) > 8:
-            # some character that is not a space here means active
-            connected = network[0] != " "
-            # splitting by : unfortunately also splits the mac address, it also contains some \ characters
-            # strip the \ characters and join it back
-            mac = ":".join(map(lambda octet: octet.rstrip("\\"), network[1:7]))
-            ssid = network[7]
-            strength = network[11]
-            security = network[13]
-            networks_out.append(
-                {
-                    "connected": connected,
-                    "mac": mac,
-                    "ssid": ssid,
-                    "strength": strength,
-                    "security": security,
-                    "known": known_conn_list.stdout.find(ssid) >= 0,
-                }
-            )
+    for ap_path in access_points:
+        ap = bus.get(dbus.NM_PATH, ap_path)
+        networks_out.append(
+            {
+                "connected": ap_path is active_point,
+                "mac": bytearray(ap.HwAddress).decode("utf-8"),
+                "ssid": bytearray(ap.Ssid).decode("utf-8"),
+                "strength": str(ap.Strength),
+                "security": "?",
+            }
+        )
     return networks_out
 
 
 def connect_to_wifi_network(ssid: str, password: str):
-    known_conn_list = subprocess.run(
-        ["nmcli", "-t", "con"], stdout=subprocess.PIPE, text=True, check=True
-    )
-    if known_conn_list.stdout.find(ssid) >= 0:
-        subprocess.run(["nmcli", "con", "up", ssid], check=True)
+    global connection_state
+    connection_state = 0
+    wifi_device, bus, wifi_path = dbus.get_wifi_device()
+    nm, _ = dbus.get_nm()
+    loop = GLib.MainLoop()
+
+    def monitor_connection(new, old, reason):
+        global connection_state
+        # print(f"new {new}, old {old}, reason {reason}")
+        if (
+            new == nmconstants.NM_DEVICE_STATE_UNMANAGED
+            or new == nmconstants.NM_DEVICE_STATE_ACTIVATED
+            or new == nmconstants.NM_DEVICE_STATE_FAILED
+        ):
+            connection_state = new
+            loop.quit()
+
+    def check_timeout():
+        loop.quit()
+
+    try:
+        _, con_path = networking.get_connection(ssid)
+        wifi_device.onStateChanged = monitor_connection
+        nm.ActivateConnection(con_path, "/", "/")
+        GLib.timeout_add_seconds(60, check_timeout)
+        loop.run()
+        if connection_state == 0:
+            raise TimeoutError("connection timed out")
+        elif not connection_state == nmconstants.NM_DEVICE_STATE_ACTIVATED:
+            raise ValueError(f"connection failed {connection_state}")
+        else:
+            return
+    except EnvironmentError:
+        pass
+
+    settings = {
+        "connection": {
+            "id": GLib.Variant("s", ssid),
+            "type": GLib.Variant("s", "802-11-wireless"),
+        },
+        "802-11-wireless": {
+            "ssid": GLib.Variant("ay", bytearray(ssid, "utf-8")),
+            "mode": GLib.Variant("s", "infrastructure"),
+        },
+        "802-11-wireless-security": {
+            "key-mgmt": GLib.Variant("s", "wpa-psk"),
+            "psk": GLib.Variant("s", password),
+        },
+        "ipv4": {"method": GLib.Variant("s", "auto")},
+        "ipv6": {"method": GLib.Variant("s", "ignore")},
+    }
+    wifi_device.onStateChanged = monitor_connection
+    nm.AddAndActivateConnection(settings, wifi_path, "/")
+    GLib.timeout_add_seconds(60, check_timeout)
+    # using threading.event it would not call monitor_connection
+    loop.run()
+    if connection_state == 0:
+        raise TimeoutError("connection timed out")
+    elif not connection_state == nmconstants.NM_DEVICE_STATE_ACTIVATED:
+        raise ValueError(f"connection failed {connection_state}")
+    else:
         return
-    result = subprocess.run(
-        ["nmcli", "dev", "wifi", "connect", ssid, "password", password],
-        stdout=subprocess.PIPE,
-        text=True,
-        check=True,
-    )
-    # for some reason this function returns exit code 0 even on failure
-    search_str = "Error:"
-    idx = result.stdout.find(search_str)
-    if idx >= 0:
-        raise EnvironmentError(f"{result.stdout[len(search_str):].strip()}")
 
 
 def delete_wifi_network(name: str):
-    subprocess.run(["nmcli", "con", "delete", name], check=True)
+    client = dbus.get_nm_client()
+    con = client.get_connection_by_id(name)
+    con.delete_async(None, None, None)
