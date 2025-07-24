@@ -16,7 +16,7 @@ setup(
     author="GOcontroll",
     author_email="info@gocontroll.com",
     maintainer="Maud Spierings",
-    install_requires=["pydbus"],
+#    install_requires=["pydbus","PyGObject"],
     packages=[
         "PyModuline",
     ],

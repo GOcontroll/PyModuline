@@ -13,7 +13,7 @@ from gi.repository import NM, GLib
 
 def get_wifi() -> bool:
     client = dbus.get_nm_client()
-    return client.get_wireless_enabled() and client.wireless_hardware_get_enabled()
+    return client.wireless_get_enabled() and client.wireless_hardware_get_enabled()
 
 
 def get_wifi_mode() -> str:
@@ -22,12 +22,13 @@ def get_wifi_mode() -> str:
     if wifi_device is None:
         raise IOError("No WiFi device found")
     mode = wifi_device.get_mode()
-    if mode == NM.SETTING_WIRELESS_MODE_INFRA:
+    
+    if mode.value_nick == 'infra':
         return "wifi"
-    elif mode == NM.SETTING_WIRELESS_MODE_AP:
+    elif mode.value_nick == 'ap':
         return "ap"
     else:
-        raise EnvironmentError(f"Wifi device in unexpected mode: {mode}")
+        raise EnvironmentError(f"Wifi device in unexpected mode: {mode.value_nick}")
 
 
 def set_wifi(enable: bool):
@@ -84,12 +85,12 @@ def activate_ap():
             owned_connection = client.get_connection_by_uuid(connection.get_uuid())
             if owned_connection.get_id() == "GOcontroll-AP":
                 owned_connection.get_setting_connection().set_property(
-                    "autoconnect", "yes"
+                    "autoconnect", True
                 )
                 ap_connection = owned_connection
             else:
                 owned_connection.get_setting_connection().set_property(
-                    "autoconnect", "no"
+                    "autoconnect", False
                 )
             owned_connection.commit_changes_async(True, None, None, None)
     client.activate_connection_async(ap_connection, None, None, None, None, None)
@@ -104,11 +105,11 @@ def deactivate_ap():
             owned_connection = client.get_connection_by_uuid(connection.get_uuid())
             if owned_connection.get_id() == "GOcontroll-AP":
                 owned_connection.get_setting_connection().set_property(
-                    "autoconnect", "no"
+                    "autoconnect", False
                 )
             else:
                 owned_connection.get_setting_connection().set_property(
-                    "autoconnect", "yes"
+                    "autoconnect", True
                 )
             owned_connection.commit_changes_async(True, None, None, None)
     client.activate_connection_async(
@@ -180,12 +181,10 @@ def get_ap_connections() -> list[dict[str, str]]:
 
 def get_wifi_networks() -> list[dict[str, str]]:
     """Get the list of available wifi networks and their attributes"""
-    client = dbus.get_nm_client()
-    wifi_device = client.get_device_by_iface("wlan0")
-
+    wifi_device, bus, wifi_path = dbus.get_wifi_device()
     wifi_device.RequestScan({})
     access_points = wifi_device.GetAccessPoints()
-    active_point = wifi_device.ActiveAccessPoint()
+    active_point = wifi_device.ActiveAccessPoint
 
     networks_out = []
     for ap_path in access_points:
@@ -193,7 +192,7 @@ def get_wifi_networks() -> list[dict[str, str]]:
         networks_out.append(
             {
                 "connected": ap_path is active_point,
-                "mac": bytearray(ap.HwAddress).decode("utf-8"),
+                "mac": ap.HwAddress,
                 "ssid": bytearray(ap.Ssid).decode("utf-8"),
                 "strength": str(ap.Strength),
                 "security": "?",

@@ -8,13 +8,9 @@ from gi.repository import NM
 
 NM_PATH = "org.freedesktop.NetworkManager"
 
-global nm_client
-
 
 def get_nm_client():
-    global nm_client
-    if nm_client is None:
-        nm_client = NM.Client.new(None)
+    nm_client = NM.Client.new(None)
     return nm_client
 
 
